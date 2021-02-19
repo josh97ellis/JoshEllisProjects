@@ -1,0 +1,257 @@
+Project Description: 
+  The focus of this project is to allow key users in my company to evaluate the root cause of a key Supply Chain Metric: OTIF.
+  We previously have had no insight on how to gather this data or how to evalute the root cause of an OTIF miss. OTIF typically 
+  looks at deliveres in a given time period, and determines if the deliveres were completed on time and in full. Due to this,
+  there is no negative effect on performance until that delivery is made against the order item. This proposal instead calculates
+  OTIF based on when the order item is actual Due, the Target Date. Once we miss the target date for an order item, we will see an 
+  immediate negative hit on performance. This data frame is also designed to support Fill Rate calculations, another import KPI 
+  for supply chain.
+  
+Prerequesites:
+  Prior to writing this script, a tremendous amount of time working with team members to construct an accurate classification 
+  tree in order to determine the root cause of a miss. In addition to this, I had to locate where all of the relevant data exists within our
+  SAP system. From there, I built a query joining several database tables together with an appropriate variant. Finally, I recording a GUI 
+  script in SAP so that the data extract could be done automatically and consistantly. 
+  
+Beyond this script:
+  The resulting data frame is loaded to a folder for Power BI to fetch. This data is the backbone for the dashboard used to monitor
+  performance and to make business decisions. 
+
+Script:
+
+library(tidyverse)
+install.packages("chron")
+library(chron)
+
+setwd("C:/Users/v112644/OneDrive - Continental AG/Continental Projects/Supply Chain/Orders and Deliveries")
+
+##########################################################################################################################
+####################################### START OF TARGET DATE OTIF CAUSATION ##############################################
+##########################################################################################################################
+
+
+sales_flow <- read.delim("SAP Extracts/prev_mm_sales_doc_flow.txt", skip = 4, sep = "|", quote = "", header = TRUE) #Import Data from SAP Query Extracts
+delivery_pri <- read_csv("SAP Extracts/DeliveryPriorities.csv") # Import Delivery Priority Threshold Data
+
+# Tidy the Sales_Flow Data Frame
+sales_flow <- sales_flow[-1,-1]
+sales_flow <- head(sales_flow,-18)
+sales_flow <- sales_flow %>%
+  select(- "Curr..1", - "Curr..2", - "Curr..3", - "Curr..4", - "SU.1", - "WUn.1", -"WUn.2", - "SU.3", - "X.1") %>%
+  arrange(Sales.Doc., Item)
+
+sales_flow  <- sales_flow %>%   #Trim any white space that may exist in the data frame
+  mutate(across(where(is.character), str_trim))
+
+colnames(sales_flow)   #Rename the columns
+sales_flow <- sales_flow %>%
+  rename(sales.document = Sales.Doc., sales.doc.item = Item, order.create.time = Time, order.create.by = Created.by, 
+         document.date = Doc..Date, sales.org = SOrg., distr.chnl = DChl, division = Dv, first.date = Deliv..date,
+         sched.line.num = SLNo, sales.doc.type = SaTy, PO.type = POtyp, sold.to = Sold.to.pt, cust.group.1 = Grp1, 
+         cust.group.2 = Grp2, cust.group.3 = Grp3, cust.group.4 = Grp4, cust.group.5 = Grp5, credit.risk.category = Risk.category,
+         credit.release.date = Release, next.credit.check.date = NextChe., doc.currency = Curr., sap.material = Material,
+         material.group = Matl.Group, material.description = Description, order.item.value = Net.value, order.item.cost = Cost,
+         order.item.qty = Order.Quantity, sales.unit = SU, weight.unit = WUn, delivery.priority = DPrio, Plant = Plnt,
+         shipping.point = ShPt, order.item.price = Net.price, price.unit = per, customer.number = Customer, customer.name = Name.1,
+         region = Rg, requirement.type = RqTy, stock.Plant = ValA, delivery.status = DS, delivery.item = Item.1,
+         delivery.priority.desc = Description.1, reason.for.rejection = Rj, delivery.create.by = Created.by.2,
+         delivery.create.date = Created.on.2, delivery.create.time = Time.2, planned.goods.issue.date = Pl.GI.date,
+         actual.goods.issue.date = Ac.GI.date, delivery.item.quantity = Delivery.quantity, delivery.sales.unit = SU.2)
+
+# Correct the data type for entire data frame
+sales_flow$sales.document <- as.integer(sales_flow$sales.document)
+sales_flow$sales.doc.item <- as.integer(sales_flow$sales.doc.item)
+sales_flow$order.create.time <- chron(times = sales_flow$order.create.time)
+sales_flow$document.date <- as.Date(sales_flow$document.date, format = "%m/%d/%Y")
+sales_flow$sales.org <- as.factor(sales_flow$sales.org)
+sales_flow$distr.chnl <- as.factor(sales_flow$distr.chnl)
+sales_flow$division <- as.factor(sales_flow$division)
+sales_flow$first.date <- as.Date(sales_flow$first.date, format = "%m/%d/%Y")
+sales_flow$Req.dlv.dt <- as.Date(sales_flow$Req.dlv.dt, format = "%m/%d/%Y")
+sales_flow$sales.doc.type <- as.factor(sales_flow$sales.doc.type)
+sales_flow$PO.type <- as.factor(sales_flow$PO.type)
+sales_flow$PO.date <- as.Date(sales_flow$PO.date, format = "%m/%d/%Y")
+sales_flow$sold.to <- as.factor(sales_flow$sold.to)
+sales_flow$credit.risk.category <- as.factor(sales_flow$credit.risk.category)
+sales_flow$credit.release.date <- as.Date(sales_flow$credit.release.date, format = "%m/%d/%Y")
+sales_flow$next.credit.check.date <- as.Date(sales_flow$next.credit.check.date, format = "%m/%d/%Y")
+sales_flow$doc.currency <- as.factor(sales_flow$doc.currency)
+sales_flow$sap.material <- as.integer(sales_flow$sap.material)
+sales_flow$material.group <- as.factor(sales_flow$material.group)
+sales_flow$delivery.priority <- as.factor(sales_flow$delivery.priority)
+sales_flow$Plant <- as.factor(sales_flow$Plant)
+sales_flow$shipping.point <- as.factor(sales_flow$shipping.point)
+sales_flow$requirement.type <- as.factor(sales_flow$requirement.type)
+sales_flow$Target.date <- as.Date(sales_flow$Target.date, format = "%m/%d/%Y")
+sales_flow$Last.SchL.Dt <- as.Date(sales_flow$Last.SchL.Dt, format = "%m/%d/%Y")
+sales_flow$Created.on.1 <- as.Date(sales_flow$Created.on.1, format = "%m/%d/%Y")
+sales_flow$delivery <- as.character(sales_flow$Delivery)
+sales_flow$delivery.item <- as.character(sales_flow$delivery.item)
+sales_flow$delivery.create.time <- chron(times = sales_flow$delivery.create.time)
+sales_flow$delivery.create.date <- as.Date(sales_flow$delivery.create.date, format = "%m/%d/%Y")
+sales_flow$planned.goods.issue.date <- as.Date(sales_flow$planned.goods.issue.date, format = "%m/%d/%Y")
+sales_flow$actual.goods.issue.date <- as.Date(sales_flow$actual.goods.issue.date, format = "%m/%d/%Y")
+sales_flow$delivery.status <- as.factor(sales_flow$delivery.status)
+sales_flow$stock.Plant <- as.factor(sales_flow$stock.Plant)
+sales_flow$order.item.qty <- as.numeric(gsub(",", "", sales_flow$order.item.qty))
+sales_flow$order.item.cost <- as.numeric(gsub(",", "", sales_flow$order.item.cost))
+sales_flow$order.item.value <- as.numeric(gsub(",", "", sales_flow$order.item.value))
+sales_flow$delivery.item.quantity <- as.numeric(gsub(",", "", sales_flow$delivery.item.quantity))
+sales_flow$Total.Stock <- as.numeric(gsub(",", "", sales_flow$Total.Stock))
+
+
+# Concatenate columns to create DateTime Fields and Key ID Fields 
+sales_flow$created.on.date.time <- as.POSIXct(paste(sales_flow$document.date, sales_flow$order.create.time), format = "%Y-%m-%d %H:%M:%S")
+sales_flow$delivery.create.date.time <- as.POSIXct(paste(sales_flow$delivery.create.date, sales_flow$delivery.create.time), format = "%Y-%m-%d %H:%M:%S")
+sales_flow$order.item.id <- paste(sales_flow$sales.document, "-", sales_flow$sales.doc.item)
+sales_flow$delivery.item.id <- paste(sales_flow$Delivery, "-", sales_flow$delivery.item)
+sales_flow$order.shipping.id <- paste(sales_flow$sales.document, "-", sales_flow$shipping.point)
+sales_flow$order.item.delivery.id <- paste(sales_flow$order.item.id, "-", sales_flow$delivery)
+
+
+sales_flow <- sales_flow %>% group_by(order.item.delivery.id) %>% mutate(  # Calculate the delivered qty including crate qty's (DItem > 900000)
+  actual.delivery.qty = sum(delivery.item.quantity))
+sales_flow <- sales_flow %>% filter(as.numeric(delivery.item) < 900000)  # Remove the crate deliveries, since these have been summed to the actual delivery Item
+
+sales_flow <- transform(sales_flow, order.item.count = ave(seq(nrow(sales_flow)), order.item.id, FUN = length)) # Calculate count of deliveries for each order item line
+
+
+# Join the delivery priority days allowed for on time delivery
+delivery_pri$Priority <- as.factor(delivery_pri$Priority)
+sales_flow <- sales_flow %>%
+  left_join(delivery_pri[ , c("Priority", "Days minus Customer Requested Date")], by = c("delivery.priority" = "Priority" ))
+
+
+# define threshold for a late order creation, 3:00 pm est
+late.del.thres <- "15:00:00"
+late.del.threshold <- chron(times = late.del.thres)
+sales_flow$order.create.time <- chron(times = sales_flow$order.create.time)
+
+
+sales_flow$delivery.flag <- ifelse(is.na(sales_flow$Delivery) == FALSE, "Has Delivery", "No Delivery") # 
+
+# Determine the type of delivery
+sales_flow <- sales_flow %>%
+  mutate(
+    delivery.create.type = case_when(
+      first.date != Target.date ~ "Ship as soon as available",
+      first.date == Target.date & PO.date != Target.date ~ "Future Release",
+      first.date == Target.date & PO.date == Target.date ~ "Same Day Shipment",
+    )
+  )
+
+# Calculate how many days early/late that the delivery was created
+sales_flow <- sales_flow %>%
+  mutate(
+    delivery.create.late.days = case_when(
+      first.date != Target.date ~ delivery.create.date - first.date,
+      first.date == Target.date & PO.date != Target.date ~ delivery.create.date - (Target.date - `Days minus Customer Requested Date`),
+      first.date == Target.date & PO.date == Target.date ~ delivery.create.date - PO.date,
+    )
+  )
+
+# Determine conditional flags that will be used to evaluate Causation
+sales_flow <- sales_flow %>%
+  mutate(
+    late.delivery.test = case_when(
+      actual.goods.issue.date > Target.date | is.na(actual.goods.issue.date) ~ "Y",
+      TRUE ~ "N"
+    ),
+    del.create.late.test = case_when(
+      delivery.create.late.days > 0 ~ "Y",
+      TRUE ~ "N"
+    ),
+    del.prio.05.42 = case_when(
+      delivery.priority == "5" | delivery.priority == "42" ~ "Y",
+      TRUE ~ "N"
+    ),
+    credit.release.test = case_when(
+      is.na(credit.release.date) == FALSE ~ "Y",
+      TRUE ~ "N"
+    ),
+    multiple.deliveries = case_when(
+      order.item.count > 1 ~ "Y",
+      TRUE ~ "N"
+    ),
+    order.timing.test = case_when(
+      order.create.time > late.del.threshold ~ "Y",
+      TRUE ~ "N"
+    ),
+    warehouse.miss.test = case_when(
+      actual.goods.issue.date > planned.goods.issue.date ~ "Y",
+      TRUE ~ "N"
+    )
+  )
+
+# Decision Tree Conditional Statement
+sales_flow <- sales_flow %>%
+  mutate(
+    causation = case_when (
+      delivery.flag == "No Delivery" & (Total.Stock > order.item.qty) ~ "Credit Hold",
+      delivery.flag == "No Delivery" & is.na(Total.Stock) | (Total.Stock < order.item.qty) ~ "Stock Out",
+      delivery.flag == "Has Delivery" & late.delivery.test == "N" ~ "Perfect Line",
+      delivery.flag == "Has Delivery" & late.delivery.test == "Y" & del.create.late.test == "N" & warehouse.miss.test == "Y" ~ "Warehouse Delay",
+      delivery.flag == "Has Delivery" & late.delivery.test == "Y" & del.create.late.test == "N" & warehouse.miss.test == "N" & del.prio.05.42 == "Y" ~ "CrossDock/WillCall",
+      delivery.flag == "Has Delivery" & late.delivery.test == "Y" & del.create.late.test == "N" & warehouse.miss.test == "N" & del.prio.05.42 == "N" ~ "Warehouse Other",
+      delivery.flag == "Has Delivery" & late.delivery.test == "Y" & del.create.late.test == "Y" & multiple.deliveries == "Y" ~ "Stock Out",
+      delivery.flag == "Has Delivery" & late.delivery.test == "Y" & del.create.late.test == "Y" & multiple.deliveries == "N" & order.timing.test == "Y" ~ "Order Timing",
+      delivery.flag == "Has Delivery" & late.delivery.test == "Y" & del.create.late.test == "Y" & multiple.deliveries == "N" & order.timing.test == "N" & credit.release.test == "Y" ~ "Credit Hold",
+      TRUE ~ "Stock Out"
+    )
+  )
+
+
+# Evaluate Results of classification 
+
+otif_trgt <- sales_flow %>% distinct(order.item.id, .keep_all = TRUE)
+
+otif_trgt %>%
+  filter(delivery.flag == "No Delivery") %>%
+  group_by(causation) %>%
+  summarise(n = n()) %>%
+  mutate(prop = n / sum(n)*100)
+
+
+otif_trgt %>%
+  group_by(causation) %>%
+  summarise(n = n()) %>%
+  mutate(prop = n / sum(n)*100)
+
+
+otif_trgt %>%
+  filter(causation != "Perfect Line", distr.chnl != "9") %>%
+  ggplot() +
+  geom_bar(mapping = aes(x = sales.org, fill = causation), position = "fill") +
+  facet_wrap(~distr.chnl)
+
+otif_trgt_pct <- otif_trgt %>%
+  filter(distr.chnl != "9") %>%
+  group_by(sales.org, distr.chnl, causation) %>%
+  summarise(n = n()) %>%
+  mutate(percent = n / sum(n)*100)
+
+ggplot(otif_trgt_pct) +
+  geom_col(aes(causation, y = percent, fill = causation)) +
+  geom_text(aes(x = causation, y = percent + 2, label = round(percent, 4))) +
+  facet_grid(sales.org ~ distr.chnl)
+
+ggplot(otif_trgt) +
+  geom_bar(mapping = aes(x = sales.org, fill = causation), position = "fill") +
+  facet_wrap(~distr.chnl)
+  
+
+# DATA EXTRACTIONS
+
+
+write.csv(   # full data extract to One Drive
+  sales_flow, 
+  paste0(file = "C:/Users/v112644/OneDrive - Continental AG/Power BI Data/Supply Chain Metrics/Orders and Deliveries on Target Date/Complete R Extracts/Target_SalesDoc", " ", format(Sys.time(), "%d-%b-%Y %H.%M"), ".csv")
+)
+
+testdoc <- sales_flow[sample(nrow(sales_flow), 5000), ] # Create a sample document which will be exported with the full data frame
+
+write.csv(   # Sample Data extract to One Drive Folder
+  testdoc,
+  paste0(file = "C:/Users/v112644/OneDrive - Continental AG/Power BI Data/Supply Chain Metrics/Orders and Deliveries on Target Date/Test R Extracts/Test_Target_SalesDoc", " ", format(Sys.time(), "%d-%b-%Y %H.%M"), ".csv")
+)
+
